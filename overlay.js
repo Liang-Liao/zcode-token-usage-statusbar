@@ -1198,6 +1198,13 @@
        * 都是真·未被盖（弹层在别处，输入框露着）。 */
       if (hit === document.body || hit === document.documentElement) return true;
       if (hit === el || hit.contains(el) || el.contains(hit)) return true;   // 命中自身/祖先/内部装饰层
+      /* 悬浮气泡豁免：非模态浮层（「剩余额度」hover 卡、下拉/选择器弹层——body 直挂、
+       * 无遮罩）会压住输入框中心点，按旧判定悬停一超 400ms 迟滞整条就消失（用户实测）。
+       * 但条挂在输入框正下方，上方浮层与条并无几何冲突：命中元素只是部分遮挡（未把
+       * 输入框矩形整体罩住）时仍判可见。整体罩住才维持"被盖"——模态全屏遮罩等真接管
+       * 行为不变，模态弹窗/设置页另有 modalOpen/inGhostSubtree 收口。 */
+      var hr = hit.getBoundingClientRect();
+      if (hr.left > r.left || hr.top > r.top || hr.right < r.right || hr.bottom < r.bottom) return true;
       if (ownOK && isOwnOverlay(hit)) return true;
       return false;
     }
