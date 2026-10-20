@@ -100,12 +100,13 @@
 
   /* 设置页（MCP 配置等）内的编辑框不是聊天输入框：设置视图是整页路由——
    * section[data-settings-content-frame] > div[data-settings-panel-frame] 包着全部
-   * 设置页，里面的 JSON/环境变量文本框（MCP 表单展开「环境变量（可选）」后的
+   * 设置页（data-testid="settings-page" 为设置页根标记，与双 frame 并集匹配），
+   * 里面的 JSON/环境变量文本框（MCP 表单展开「环境变量（可选）」后的
    * rows=4 文本框）落在视口下半部，会被协调器当聊天输入框派发，条冒在设置页
    * 底部（实测 bug）。带设置框架标记的候选一律不派发；聊天流（composer/
    * 权限面板/批准框）不在设置框架内，行为不受影响。 */
   function inSettingsView(el) {
-    try { return !!(el.closest && el.closest("[data-settings-content-frame],[data-settings-panel-frame]")); } catch (e) { return false; }
+    try { return !!(el.closest && el.closest('[data-testid="settings-page"],[data-settings-content-frame],[data-settings-panel-frame]')); } catch (e) { return false; }
   }
   function coordinator() {
     /* 协调器（v61.1）：扫描主文档里全部下半屏可见输入框，按 pane 键（data-pane-id，
@@ -1535,6 +1536,7 @@
         var r = composer.getBoundingClientRect();
         var on = r.width > 60 && r.height > 14 && r.bottom > 0 && r.top < innerHeight &&
           !inGhostSubtree(composer) &&   // 设置页等幽灵壳（opacity-0/inert）：视觉已隐藏（v61）
+          !inSettingsView(composer) &&   // 设置页排除的第四处收口——已绑到设置页编辑框时不显示（防其它绑定路径漏排除）
           !modalOpen() &&                // v62：模态弹窗（模型配置等）打开时整体收起，弹窗内容不归条管（issue #9）
           (reallyVisible(composer, true) || coverOK(composer));
         if (!on) {
