@@ -26,7 +26,7 @@ asar 注入行与 MCP 注册都指向数据目录 —— 之后 clone 目录可�
 overlay 副本刷新后由泵 2 秒内热重载；改了 inject-main.cjs（泵）才需要重启 ZCode。
 
 ZCode 安装位置自动探测：环境变量 ZCODE_ASAR → 当前平台常见安装位置下找 resources\\app.asar
-（Windows：D:\\ZCode 等；macOS：/Applications、~/Applications 下的 ZCode.app；
+（Windows：D:\\ZCode、各盘 \\Programs\\ZCode 等；macOS：/Applications、~/Applications 下的 ZCode.app；
 Linux：/opt/ZCode、/usr/lib/zcode 等 deb/rpm 布局）；
 失败且终端可交互时询问，或用 --root/--asar 指定。非默认位置首次安装成功后路径记住在 config.json
 （asar_path 字段），之后的安装/卸载一律免传 --asar。
@@ -184,6 +184,12 @@ def find_asar():
         if p.is_file():
             return p
     if sys.platform == "win32":
+        # 各盘常规安装目录 <盘>:\Programs\ZCode（如 D:\Programs\ZCode 这类非默认位置；
+        # 按目录名猜，同样必须过 is_zcode_app：防注入错目标）
+        for d in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+            p = Path(f"{d}:\\") / "Programs" / "ZCode" / "resources" / "app.asar"
+            if p.is_file() and is_zcode_app(p):
+                return p
         # 兜底：扫 %LOCALAPPDATA%\Programs 一层子目录
         # （必须过 is_zcode_app：该目录下可能有其它 Electron 应用，命中它们会注入错目标）
         prog = expand(r"%LOCALAPPDATA%\Programs")
