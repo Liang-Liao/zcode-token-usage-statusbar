@@ -986,35 +986,63 @@ def _remote_fetch(force_sids, have_local, rcfg):
     return by, today, err
 
 
+def _empty_snapshot(sid, cfg):
+    """空库/查询失败时的零值快照：字段必须与 _session_snapshot 对齐，
+    否则 snapshot() 顶层读 base["code"]/["tools"]/["ctx_exc"] 直接 KeyError（v32 审查修复）。"""
+    return {"sid": sid, "title": "", "active": False, "turns": 0, "requests": 0,
+            "input": 0, "output": 0, "reasoning": 0, "cache_read": 0, "cache_write": 0,
+            "total": 0, "tool_calls": 0, "retries": 0, "ctx": 0, "updated": "", "last_at": 0, "started": 0,
+            "last_turn": dict(_EMPTY_TURN), "last": {"duration_ms": 0, "ttft_ms": 0, "model": "", "tps": 0, "startedAt": 0, "endedAt": 0},
+            "code": {"add": None, "del": None, "files": None}, "ctx_exc": 0,
+            "tools": {"total": 0, "errors": 0, "list": []},
+            "sub": {"requests": 0, "total": 0, "input": 0, "output": 0, "cache_read": 0,
+                    "reasoning": 0, "cache_write": 0, "active": False, "list": []},
+            "context_window": cfg["context_window"], "context_auto": False}
+
+
 def snapshot(force_sid=""):
     """单次快照：最新会话 + 最近 6+6 会话池 + 今日。
     force_sid：各窗口当前会话 id，逗号分隔（泵按窗口汇总上报：主进程 IPC 映射的焦点会话 +
     overlay localStorage 键兜底），全部强制纳入快照——不在 6+6 池里的会话（新开的、久远的）
     也能被各窗口找到自己的会话并显示（v32 起；v34 改为多窗口多 sid）。"""
     cfg = load_config()
-    con = connect()
+    con = None
+    local_error = None
     try:
-        force_sids = []
-        for fs in str(force_sid).split(","):
-            fs = fs.strip()
-            if fs and re.fullmatch(r"[A-Za-z0-9_-]+", fs) and fs not in force_sids:
-                force_sids.append(fs)
-        day = _day_start()
-        start_ms, end_ms = _epoch_ms(day), _epoch_ms(day + timedelta(days=1))
-        today = _cached_agg(("today", start_ms), lambda: _today_usage(con, start_ms, end_ms))
-        rows = _scan_session_ids(con)
-        # v9：force 会话在本库的真实存在性（session 行或任一 usage 行）。远端数据源
-        # 双向依赖它：本地已存在 → 不去远端白跑；远端按同款判定区分"确无此会话"与
-        # "零值快照"（负缓存的依据）。两次索引点查 <1ms。
-        known_sids = []
-        if force_sids:
-            qmarks = ",".join("?" * len(force_sids))
-            have_local = {r[0] for r in con.execute(
-                f"select id from session where id in ({qmarks})", force_sids)}
-            have_local |= {r[0] for r in con.execute(
-                f"select distinct session_id from model_usage where session_id in ({qmarks})",
-                force_sids)}
+        con = connect()
+    except sqlite3.Error as exc:
+        local_error = str(exc)[:200]
+    try:
+        try:
+            force_sids = []
+            for fs in str(force_sid).split(","):
+                fs = fs.strip()
+                if fs and re.fullmatch(r"[A-Za-z0-9_-]+", fs) and fs not in force_sids:
+                    force_sids.append(fs)
+            day = _day_start()
+            start_ms, end_ms = _epoch_ms(day), _epoch_ms(day + timedelta(days=1))
+            today = _cached_agg(("today", start_ms), lambda: _today_usage(con, start_ms, end_ms)) if con else (0,) * 11
+            rows = _scan_session_ids(con) if con else []
+            # v9：force 会话在本库的真实存在性（session 行或任一 usage 行）。远端数据源
+            # 双向依赖它：本地已存在 → 不去远端白跑；远端按同款判定区分"确无此会话"与
+            # "零值快照"（负缓存的依据）。两次索引点查 <1ms。
+            have_local = set()
+            if con and force_sids:
+                qmarks = ",".join("?" * len(force_sids))
+                have_local = {r[0] for r in con.execute(
+                    f"select id from session where id in ({qmarks})", force_sids)}
+                have_local |= {r[0] for r in con.execute(
+                    f"select distinct session_id from model_usage where session_id in ({qmarks})",
+                    force_sids)}
             known_sids = [s for s in force_sids if s in have_local]
+        except sqlite3.Error as exc:
+            # 库结构漂移/明细表缺失：单行降级——不清掉已成功的远端分片，失败行走空结构
+            local_error = str(exc)[:200]
+            if con is not None:
+                con.close()
+                con = None
+            today, rows, have_local = (0,) * 11, [], set()
+            known_sids = []
         # 远端补齐（v9）：本地不存在的 force 会话（SSH 远程会话）改查远端库
         rcfg = _remote_cfg(cfg)
         remote_by, remote_today, remote_err = {}, None, None
@@ -1024,22 +1052,17 @@ def snapshot(force_sid=""):
         # 零值不再只能靠用户猜"插件坏了"（issue #14），也区分"远端也没查到"（issue #10）。
         not_local = [s for s in force_sids if s not in have_local] if force_sids else []
         latest_sid = max(rows, key=lambda r: r[1])[0] if rows else None
-        if latest_sid:
-            base = _session_snapshot(con, latest_sid, cfg)
-        else:
-            # 空库（无任何 completed 请求）fallback：字段必须与 _session_snapshot 对齐，
-            # 否则 snapshot() 顶层读 base["code"]/["tools"]/["ctx_exc"] 直接 KeyError（v32 审查修复）
-            base = {"sid": "", "title": "", "active": False, "turns": 0, "requests": 0,
-                    "input": 0, "output": 0, "reasoning": 0, "cache_read": 0, "cache_write": 0,
-                    "total": 0, "tool_calls": 0, "retries": 0, "ctx": 0, "updated": "",
-                    "started": 0, "last_at": 0,
-                    "last_turn": dict(_EMPTY_TURN),
-                    "last": {"duration_ms": 0, "ttft_ms": 0, "model": "", "tps": 0, "startedAt": 0, "endedAt": 0},
-                    "code": {"add": None, "del": None, "files": None}, "ctx_exc": 0,
-                    "tools": {"total": 0, "errors": 0, "list": []},
-                    "sub": {"requests": 0, "total": 0, "input": 0, "output": 0, "cache_read": 0,
-                            "reasoning": 0, "cache_write": 0, "active": False, "list": []},
-                    "context_window": cfg["context_window"], "context_auto": False}
+        def local_snapshot(sid, light=False):
+            nonlocal local_error
+            if con is None:
+                return _empty_snapshot(sid, cfg)
+            try:
+                return (_light_snapshot if light else _session_snapshot)(con, sid, cfg)
+            except sqlite3.Error as exc:
+                # 本地明细表缺失不能丢弃已成功的远端分片，失败行单独降级
+                local_error = str(exc)[:200]
+                return _empty_snapshot(sid, cfg)
+        base = local_snapshot(latest_sid) if latest_sid else _empty_snapshot("", cfg)
         normal = sorted((r for r in rows if not str(r[0]).startswith("sess_subagent")),
                         key=lambda r: -r[1])[:6]
         suba = sorted((r for r in rows if str(r[0]).startswith("sess_subagent")),
@@ -1061,13 +1084,12 @@ def snapshot(force_sid=""):
         for i, sid in enumerate(ids):
             if sid == latest_sid:
                 rec.append(base)   # base 本就是 latest 的完整快照，不重算第二遍
-            elif i < full_n:
-                rec.append(_session_snapshot(con, sid, cfg))
             else:
-                rec.append(_light_snapshot(con, sid, cfg))
+                rec.append(local_snapshot(sid, light=i >= full_n))
         # rec 建好后把远端快照挂到池首：overlay 按 sid 匹配 mine，顺序只影响兜底展示
         rec = [remote_by[s] for s in reversed(remote_ids)] + rec
         return {
+            "local_error": local_error,
             "session": base,
             "last_turn": base["last_turn"],
             "last": base["last"],
@@ -1091,7 +1113,8 @@ def snapshot(force_sid=""):
             "recent": rec,
         }
     finally:
-        con.close()
+        if con is not None:
+            con.close()
 
 
 # ---------- CLI ----------
@@ -1123,39 +1146,50 @@ def main(argv):
     except Exception:
         pass
     cmd = argv[0] if argv else "now"
-    con = connect()
-    if cmd == "now":
-        print(render_current(con))
-    elif cmd == "json":
-        # ensure_ascii 默认 True：全部 \u 转义，保证注入 executeJavaScript 时无 U+2028 类语法风险
-        # 可选第二参数：强制纳入快照的会话 id，逗号分隔（各窗口当前会话，泵汇总上报）
-        force_sid = argv[1] if len(argv) > 1 else ""
-        print(json.dumps(snapshot(force_sid)))
-    elif cmd == "serve":
-        con.close()   # serve 自管连接（每请求新开），退掉 main 预建的这把
-        serve()
-    elif cmd == "today":
-        print(render_today(con))
-    elif cmd == "days":
-        print(render_days(con, int(argv[1]) if len(argv) > 1 else 7))
-    elif cmd == "sessions":
-        print(render_sessions(con, int(argv[1]) if len(argv) > 1 else 10))
-    elif cmd == "models":
-        print(render_models(con, int(argv[1]) if len(argv) > 1 else 7))
-    elif cmd == "workspace":
-        print(render_workspace(con, argv[1] if len(argv) > 1 else ""))
-    elif cmd == "session":
-        print(render_session_detail(con, argv[1] if len(argv) > 1 else ""))
-    elif cmd == "watch":
-        sec = int(argv[1]) if len(argv) > 1 else 5
-        while True:
-            print("\x1b[2J\x1b[H", end="")
-            print(render_current(con), flush=True)
-            print(L(f"\n(每 {sec}s 刷新, Ctrl+C 退出)", f"\n(refreshes every {sec}s, Ctrl+C to quit)"), flush=True)
-            time.sleep(sec)
-    else:
-        print(__doc__)
-    con.close()
+    try:
+        con = connect()
+        if cmd == "now":
+            print(render_current(con))
+        elif cmd == "json":
+            # ensure_ascii 默认 True：全部 \u 转义，保证注入 executeJavaScript 时无 U+2028 类语法风险
+            # 可选第二参数：强制纳入快照的会话 id，逗号分隔（各窗口当前会话，泵汇总上报）
+            force_sid = argv[1] if len(argv) > 1 else ""
+            print(json.dumps(snapshot(force_sid)))
+        elif cmd == "serve":
+            con.close()   # serve 自管连接（每请求新开），退掉 main 预建的这把
+            serve()
+        elif cmd == "today":
+            print(render_today(con))
+        elif cmd == "days":
+            print(render_days(con, int(argv[1]) if len(argv) > 1 else 7))
+        elif cmd == "sessions":
+            print(render_sessions(con, int(argv[1]) if len(argv) > 1 else 10))
+        elif cmd == "models":
+            print(render_models(con, int(argv[1]) if len(argv) > 1 else 7))
+        elif cmd == "workspace":
+            print(render_workspace(con, argv[1] if len(argv) > 1 else ""))
+        elif cmd == "session":
+            print(render_session_detail(con, argv[1] if len(argv) > 1 else ""))
+        elif cmd == "watch":
+            sec = int(argv[1]) if len(argv) > 1 else 5
+            while True:
+                print("\x1b[2J\x1b[H", end="")
+                print(render_current(con), flush=True)
+                print(L(f"\n(每 {sec}s 刷新, Ctrl+C 退出)", f"\n(refreshes every {sec}s, Ctrl+C to exit)"), flush=True)
+                time.sleep(sec)
+        else:
+            print(__doc__)
+        con.close()
+    except sqlite3.OperationalError as e:
+        # 列/表变更不在 connect 的表存在性探测内（那会破坏按需裁剪的测试夹具库），
+        # 在入口统一转换成可行动提示，替代整段查询栈回溯。
+        print(L(f"查询失败：{e}", f"query failed: {e}"))
+        print(L("多半是 ZCode 升级改了用量库结构（表/列变更）。请更新本插件后再查询；"
+                "已落库的历史数据不受影响。",
+                "Most likely ZCode changed the usage DB schema in an update. "
+                "Update this plugin before querying; stored history is unaffected."))
+        return 1
+    return 0
 
 
 def render_today(con):
@@ -1169,4 +1203,4 @@ def render_today(con):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    sys.exit(main(sys.argv[1:]))
