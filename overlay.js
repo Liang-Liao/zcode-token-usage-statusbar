@@ -41,14 +41,18 @@
   } catch (e) { }
 
   /* ---------- 共享状态（多实例一致）：显示项/语言/上下文覆盖/最近一次数据 ---------- */
-  var LS = { show: "zusage3.show", ctxOv: "zusage3.ctxOv", lang: "zusage3.lang" };
+  var LS = { show: "zusage3.show", ctxOv: "zusage3.ctxOv", lang: "zusage3.lang", cnNum: "zusage3.cnNum" };
   var state = {
     show: { win: 1, ctx: 1, today: 1, turn: 1, sub: 1, tools: 1 },
     ctxOv: "", data: null,
     lang: "zh",
+    /* 万/亿单位开关：缺省开启，仅显式 "0" 关闭；只在中文界面展示并生效（英文始终 K/M/B） */
+    cnNum: 1,
   };
   /* ---------- i18n（v57）：L(中文, English) 内联双语文案，语言存 localStorage ---------- */
   function L(zh, en) { return state.lang === "en" ? en : zh; }
+  /* 万/亿单位是否生效：fmt() 共用同一判定（英文界面始终 K/M/B） */
+  function cnUnits() { return state.lang !== "en" && !!state.cnNum; }
   function ls(k, d) { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } }
   function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { } }
   try {
@@ -58,11 +62,13 @@
     }
     state.ctxOv = ls(LS.ctxOv, "");
     if (ls(LS.lang, "") === "en") state.lang = "en";
+    if (ls(LS.cnNum, "") === "0") state.cnNum = 0;
   } catch (e) { }
   function persist() {
     lsSet(LS.show, JSON.stringify(state.show));
     lsSet(LS.ctxOv, state.ctxOv);
     lsSet(LS.lang, state.lang);
+    lsSet(LS.cnNum, state.cnNum ? "1" : "0");
   }
 
   /* ---------- 多实例注册表（v61.1）：每个分屏 pane 一个条实例 ---------- */
@@ -348,6 +354,8 @@
       '<div class="hr"></div>' +
       '<div class="cap">' + L("上下文窗口", "Context window") + '</div>' +
       '<label><input type="text" class="zu-ctxov" placeholder="' + L("自动(按模型)", "auto") + '"><span class="dim">' + L("留空 = 自动（原生UI > 模型目录）", "leave empty = auto (native UI > model catalog)") + '</span></label>' +
+      /* 万/亿开关只在中文界面出现（英文始终 K/M/B，见 fmt），因此文案不走 L() */
+      (state.lang === "en" ? "" : '<label><input type="checkbox" class="zu-cn-num"><span>中文单位（万/亿）</span><em>token 数量以万/亿显示，默认开启</em></label>') +
       '<div class="hr"></div>' +
       '<div class="cap">Language / 语言</div>' +
       '<label><input type="radio" name="zu-lang" value="zh"><span>中文</span></label>' +
@@ -363,6 +371,8 @@
       panel.querySelectorAll("input[type=checkbox]").forEach(function (cb) {
         cb.checked = !!state.show[cb.dataset.k];
       });
+      var cnBox = panel.querySelector(".zu-cn-num");   // 通用回填按 data-k 取 show 项，cn-num 单独同步
+      if (cnBox) cnBox.checked = !!state.cnNum;
       var ovInput = panel.querySelector(".zu-ctxov");
       if (ovInput) ovInput.value = state.ctxOv;
     }
@@ -470,10 +480,17 @@
     /* ---------- 渲染 ---------- */
     function fmt(n) {
       n = n || 0;
+      if (cnUnits()) {
+        if (n >= 1e8) return cnUnit(n / 1e8) + "亿";
+        if (n >= 1e4) return cnUnit(n / 1e4) + "万";
+        return String(n);
+      }
+      if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
       if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
       if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
       return String(n);
     }
+    function cnUnit(x) { return x.toFixed(2).replace(/\.?0+$/, ""); }   // 至多两位小数并去尾零：58.25万、142万、1亿（数字与单位不留空格：等宽字体下空格占满一格）
     function sec(ms) { return ms ? (ms / 1000).toFixed(1) + "s" : "–"; }
 
     /* 超限判定：最近一次"上下文超限被拒"晚于最近成功请求 = 仍处于超限状态（该请求
@@ -967,6 +984,8 @@
       panel.querySelectorAll("input[type=checkbox]").forEach(function (cb) {
         cb.checked = !!state.show[cb.dataset.k];
       });
+      var cnBox = panel.querySelector(".zu-cn-num");
+      if (cnBox) cnBox.checked = !!state.cnNum;
       panel.querySelector(".zu-ctxov").value = state.ctxOv;
     }
     gear.addEventListener("click", function (e) {
@@ -987,6 +1006,12 @@
         buildPanel();   // 面板自身文案随语言重建（含 radio 勾选态）
         rebuildExcBubble();
         renderAll(true);   // 条面单位与 tooltip 文案随语言刷新（含各实例面板文案重建）
+        return;
+      }
+      if (t2.classList.contains("zu-cn-num")) {
+        state.cnNum = t2.checked ? 1 : 0;
+        persist();
+        renderAll(false);
         return;
       }
       if (t2.type === "checkbox") {
