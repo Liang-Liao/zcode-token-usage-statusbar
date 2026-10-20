@@ -479,6 +479,13 @@
         (d.getMinutes() < 10 ? "0" : "") + d.getMinutes() + ":" +
         (d.getSeconds() < 10 ? "0" : "") + d.getSeconds() : "?";
     }
+    function fmtStart(ms) {   // 会话时间范围用：完整日期 YYYY-MM-DD HH:MM（跨数日的会话，秒无意义）
+      if (!ms) return "?";
+      var d = new Date(ms);
+      function two(v) { return (v < 10 ? "0" : "") + v; }
+      return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate()) +
+        " " + two(d.getHours()) + ":" + two(d.getMinutes());
+    }
     function ioc(inp, out, cache, rea, cw) {   // 悬停明细行：输入/输出/缓存命中/缓存写入/思考
       return L("输入 ", "Input ") + fmt(inp) + L(" / 输出 ", " / Output ") + fmt(out) + L(" / 缓存命中 ", " / Cache read ") + fmt(cache) +
         (cw > 0 ? L(" / 缓存写入 ", " / Cache write ") + fmt(cw) : "") +
@@ -519,8 +526,11 @@
         var tpsCls = last.tps >= 70 ? "ok" : last.tps >= 40 ? "warm" : "hot";
         it(ico('<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>') +
           '<span class="' + tpsCls + '">' + last.tps + '</span><span class="dim">t/s</span>',
-          L("生成速度：最近完成请求的输出 tokens ÷ 生成耗时（首 token → 完成）\n≥70 t/s 绿色 · 40–70 黄色 · <40 红色",
-            "Generation speed: output tokens ÷ generation time of the latest completed request (first token → completion)\n≥70 t/s green · 40–70 yellow · <40 red"));
+          L("生成速度：最近完成请求的输出 tokens（含思考）÷ 生成耗时\n含思考段/Claude 从 started_at 起算，其余从首 token 起算\n≥70 t/s 绿色 · 40–70 黄色 · <40 红色",
+            "Generation speed: output tokens (thinking incl.) ÷ generation time of the latest completed request\nthinking segments / Claude count from started_at, others from the first token\n≥70 t/s green · 40–70 yellow · <40 red") +
+          ((last.startedAt || last.endedAt)
+            ? "\n" + L("时间范围 ", "Time span ") + (last.startedAt ? fmtStart(last.startedAt) : "—") + " - " + (last.endedAt ? fmtStart(last.endedAt) : "—")
+            : ""));
       }
       if (state.show.ctx) {
         var cw = parseInt(state.ctxOv, 10) || d.native_ctx || d.context_window || 0;
@@ -558,7 +568,14 @@
           "\n" + L("单次耗时 ", "Single request ") + sec(last.duration_ms) + L(" · 首字 ", " · First token ") + sec(last.ttft_ms) +
           L(" · 轮总耗时 ", " · Turn total ") + sec(lt.duration_ms) +
           (lt.tool_calls ? L(" · 工具调用 ", " · Tool calls ") + lt.tool_calls : "") +
-          ((lt.retries || lt.tool_errors) ? L(" · 重试 ", " · Retries ") + (lt.retries || 0) + L(" · 工具错误 ", " · Tool errors ") + (lt.tool_errors || 0) : ""));
+          ((lt.retries || lt.tool_errors) ? L(" · 重试 ", " · Retries ") + (lt.retries || 0) + L(" · 工具错误 ", " · Tool errors ") + (lt.tool_errors || 0) : "") +
+          ((typeof lt.tps === "number" && isFinite(lt.tps) && lt.tps > 0)
+            ? "\n" + L("输出速度 ", "Output rate ") + lt.tps.toFixed(1) + L(" tok/s（Σ有效段输出 ÷ Σ有效段生成时长，段间工具等待不计）", " tok/s (Σrated output ÷ Σrated generation time, tool waits excluded)") +
+                (lt.unrated_output > 0 ? L("；另有 " + fmt(lt.unrated_output) + " token 未参与测速", "; " + fmt(lt.unrated_output) + " tokens excluded from rate") : "")
+            : "") +
+          ((lt.started || lt.ended)
+            ? "\n" + L("时间范围 ", "Time span ") + (lt.started ? fmtStart(lt.started) : "—") + " - " + (lt.ended ? fmtStart(lt.ended) : "—")
+            : ""));
       }
       if (state.show.win) {
         it(ico('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>') +
@@ -569,6 +586,9 @@
           "\n" + (sess.turns || 0) + L(" 轮 · ", " turns · ") + (sess.requests || 0) + L(" 次请求", " requests") +
           (sess.tool_calls ? L(" · 工具调用 ", " · Tool calls ") + sess.tool_calls : "") +
           (sess.retries ? L(" · 重试 ", " · Retries ") + sess.retries : "") +
+          ((sess.started || sess.last_at)
+            ? "\n" + L("时间范围 ", "Time span ") + (sess.started ? fmtStart(sess.started) : "—") + " - " + (sess.last_at ? fmtStart(sess.last_at) : "—")
+            : "") +
           (d.code && (d.code.add || d.code.del) ?
             "\n" + L("代码变更 +", "Code changes +") + (d.code.add || 0) + L(" / -", " / −") + (d.code.del || 0) +
             (d.code.files ? L("（", " (") + d.code.files + L(" 文件）", " files)") : "") : ""));
@@ -591,7 +611,10 @@
         it(ico('<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>') +
           '<span class="v">' + fmt(today.total) + "</span>",
           L("今日合计：今天所有会话的 token 消耗", "Today's total: tokens of all sessions today") + "\n" + ioc(today.input, today.output, today.cache_read, today.reasoning, today.cache_write) +
-          "\n" + (today.requests || 0) + L(" 次请求", " requests") + (today.retries ? L(" · 重试 ", " · Retries ") + today.retries : ""));
+          "\n" + (today.requests || 0) + L(" 次请求", " requests") + (today.retries ? L(" · 重试 ", " · Retries ") + today.retries : "") +
+          ((today.started || today.last_at)
+            ? "\n" + L("时间范围 ", "Time span ") + (today.started ? fmtStart(today.started) : "—") + " - " + (today.last_at ? fmtStart(today.last_at) : "—")
+            : ""));
       }
       if (state.show.sub && d.sub && (d.sub.total || d.sub.active)) {
         /* v50：悬停 tooltip 只放汇总 + 打开面板的提示；各子代理明细在点击弹出的
@@ -666,10 +689,10 @@
     function stubFor(sid) {
       return { sid: String(sid || ""), title: "", active: false, turns: 0, requests: 0,
         input: 0, output: 0, reasoning: 0, cache_read: 0, cache_write: 0, total: 0,
-        tool_calls: 0, retries: 0, ctx: 0, updated: "", last_at: 0, ctx_exc: 0,
+        tool_calls: 0, retries: 0, ctx: 0, updated: "", last_at: 0, ctx_exc: 0, started: 0,
         last_turn: {requests: 0, retries: 0, tool_calls: 0, tool_errors: 0, input: 0, output: 0,
-          reasoning: 0, cache_read: 0, cache_write: 0, total: 0, duration_ms: 0, ttft_ms: 0},
-        last: {duration_ms: 0, ttft_ms: 0, model: "", tps: 0},
+          reasoning: 0, cache_read: 0, cache_write: 0, total: 0, duration_ms: 0, ttft_ms: 0, started: 0, ended: 0},
+        last: {duration_ms: 0, ttft_ms: 0, model: "", tps: 0, startedAt: 0, endedAt: 0},
         code: {add: null, del: null, files: null},
         tools: {total: 0, errors: 0, list: []},
         sub: {requests: 0, total: 0, input: 0, output: 0, cache_read: 0, reasoning: 0,
