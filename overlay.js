@@ -241,7 +241,7 @@
       /* 子代理运行中呼吸灯 */
       "@keyframes zupulse{0%,100%{opacity:1}50%{opacity:.2}}" +
       ".dot{animation:zupulse 1.6s ease-in-out infinite;font-size:var(--ui-font-size,14px);line-height:1}" +
-      ".panel{position:absolute;bottom:calc(100% + 10px);left:0;background:rgba(19,22,30,.97);" +
+      ".panel{position:absolute;bottom:calc(100% + 10px);right:0;background:rgba(19,22,30,.97);" +
       "background:color-mix(in srgb,var(--color-card,#13161e) 96%,transparent);" +
       "backdrop-filter:blur(18px) saturate(1.3);-webkit-backdrop-filter:blur(18px) saturate(1.3);" +
       "border:1px solid var(--color-border,rgba(255,255,255,.09));border-radius:12px;padding:12px 14px;display:none;" +
