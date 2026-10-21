@@ -908,12 +908,22 @@
       cancelTipGrace();
       if (panel.classList.contains("open")) return;   // 面板开着：条面不弹 tooltip（弹出也会被面板盖住，只露边角）
       var el = t.closest(".it");
+      if (!el && t.closest(".zu-main")) {
+        /* 分栏间隙/分隔符/条缘空档：以分隔符中线为界——中线左侧（含分隔符本身）
+         * 归左栏，右侧归右栏。分隔符与右栏盒之间的空白归属感在右栏（进哪栏的过渡带），
+         * 不再整片算左栏的。⚙ 在 zu-main 外，不走回退，保持原行为。 */
+        var its = main.querySelectorAll(".it");
+        var seps = main.querySelectorAll(".sep");
+        for (var i = 0; i < seps.length; i++) {
+          var sr = seps[i].getBoundingClientRect();
+          if (e.clientX < (sr.left + sr.right) / 2) { el = its[i]; break; }
+        }
+        if (!el && its.length) el = its[its.length - 1];   // 全部分隔符之右（末栏盒内已由 closest 命中；此处兜末栏之后的条缘/clip 区）归最后一栏
+      }
       if (el) {
         if (el !== tipFor) showTipFor(el);
       } else if (tipFor) {
-        /* 条面内非条目区（项间隔/分隔符/⚙）：保持当前 tooltip 不动（此处刻意无操作）。
-         * 慢速移动时命中目标在条目↔空隙间反复跳，若此处切换内容/隐藏
-         * 就是"出现一下立刻消失"的闪烁（v33.2，概览 tooltip 因此废除） */
+        /* ⚙ 等条面内非条目区：保持当前 tooltip 不动（v33.2 防闪烁） */
       }
     }, true);
     /* 鼠标甩出窗口外/窗口失焦：tooltip 立即收起（v43）。
