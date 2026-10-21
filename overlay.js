@@ -178,8 +178,7 @@
       lastSub = null,     // 子代理明细面板数据源
       instSid = "",       // 本 pane 当前会话（composer 祖先链 data-session-id）
       pendingSid = "", wantedEl = null,   // 协调器派发的最新 composer/会话
-      shrink = 0,         // 分级收缩：1 = 内容超卡片宽，「本轮/会话累计」缓存命中率已让位
-      fadeOn = false;     // 收缩后仍超宽：右缘渐隐（.zu-clip）
+      fadeOn = false;     // 内容超宽：右缘渐隐（.zu-clip）
 
     /* ---------- DOM ---------- */
     /* 样式表挂在 bar 内部而非 head：React 可能清理 head 里的外来 style，
@@ -592,7 +591,7 @@
       if (state.show.turn) {
         it(ico('<path d="M23 4v6h-6"/><path d="M20.49 15A9 9 0 1 1 18.36 5.64L23 10"/>') +
           '<span class="v">' + fmt(lt.total) + "</span>" +
-          (shrink ? "" : cachePct(lt.cache_read, lt.input)) +   // 超宽时命中率让位，明细仍在悬停 tooltip
+          cachePct(lt.cache_read, lt.input) +
           '<span class="dim">' + (lt.requests || 0) + L("次", " req") + "</span>" +
           ico('<path d="M6 3h12M6 21h12M8 3v3.5L12 11l4-4.5V3M8 21v-3.5L12 13l4 4.5V21"/>') +
           '<span class="dim">' + sec(last.duration_ms) + "</span>" +
@@ -616,7 +615,7 @@
       if (state.show.win) {
         it(ico('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>') +
           '<span class="v">' + fmt(sess.total) + "</span>" +
-          (shrink ? "" : cachePct(sess.cache_read, sess.input)) +   // 同上
+          cachePct(sess.cache_read, sess.input) +
           '<span class="dim">' + (sess.turns || 0) + L("轮 ", " turns · ") + (sess.requests || 0) + L("次", " req") + "</span>",
           L("会话累计：当前会话全部请求的 token 消耗", "Session total: tokens of all requests in the current session") + "\n" + ioc(sess.input, sess.output, sess.cache_read, sess.reasoning, sess.cache_write) +
           "\n" + (sess.turns || 0) + L(" 轮 · ", " turns · ") + (sess.requests || 0) + L(" 次请求", " requests") +
@@ -1615,17 +1614,10 @@
         }
         /* 宽度锁死卡片：min=max-width = 卡片实测宽（border-box，外缘含边框正好压在
          * 卡片两缘上），任何内容量下条都与会话框两缘对齐。内容超宽不撑破卡片，
-         * 分级收缩：先隐藏「本轮/会话累计」的缓存命中率（核心项 tps/上下文/会话累计
-         * 不动，明细仍在悬停 tooltip），迟滞 +12px/-120px 防数值刷新在阈值附近来回闪；
-         * 仍装不下由 .zu-main 右缘渐隐兜底（.zu-clip）。 */
+         * 由 .zu-main 右缘渐隐兜底（.zu-clip）；命中率明细同时在悬停 tooltip 里。 */
         var minW = Math.max(60, Math.round(ar.width));
         if (bar.style.minWidth !== minW + "px") bar.style.minWidth = minW + "px";
         if (bar.style.maxWidth !== minW + "px") bar.style.maxWidth = minW + "px";
-        var ov = main.scrollWidth - main.clientWidth;
-        var ns = shrink;
-        if (!shrink && ov > 12) ns = 1;
-        else if (shrink && ov < -120) ns = 0;
-        if (ns !== shrink) { shrink = ns; render(state.data || { session: {}, last_turn: {}, today: {}, context_window: 0 }); }
         var clip = main.scrollWidth > main.clientWidth + 1;
         if (clip !== fadeOn) { fadeOn = clip; main.classList.toggle("zu-clip", clip); }
         everMounted = true;
